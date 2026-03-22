@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3-Coloring Path Algorithm — PN Model</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0f1117; overflow: hidden; width: 100vw; height: 100vh; font-family: 'Courier New', monospace; }
+        canvas { display: block; }
+        #ui {
+            position: absolute; top: 18px; right: 22px;
+            display: flex; flex-direction: column; gap: 10px;
+            align-items: flex-end;
+        }
+        .btn {
+            padding: 8px 18px; border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.05); color: rgba(220,220,220,0.85);
+            font-family: 'Courier New', monospace; font-size: 12px;
+            cursor: pointer; border-radius: 6px; transition: all 0.2s;
+        }
+        .btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); }
+        .btn.active { background: rgba(100,180,255,0.15); border-color: rgba(100,180,255,0.5); color: #a0d0ff; }
+        #round-display {
+            position: absolute; top: 18px; left: 22px;
+            font-size: 13px; color: rgba(180,200,220,0.7);
+            line-height: 1.9;
+        }
+        #round-display .round-num { font-size: 22px; color: rgba(220,235,255,0.92); font-weight: bold; }
+        #round-display .phase { font-size: 11px; color: rgba(140,170,200,0.6); }
+        #legend {
+            position: absolute; bottom: 18px; left: 22px;
+            font-size: 11px; color: rgba(160,185,210,0.65); line-height: 2;
+        }
+        #legend .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+        #caption {
+            position: absolute; bottom: 18px; left: 0; right: 0;
+            text-align: center; font-family: 'Georgia', serif;
+            font-size: 13px; color: rgba(160,190,220,0.55);
+            pointer-events: none;
+        }
+        #caption em { color: rgba(255,210,100,0.8); font-style: italic; }
+    </style>
+</head>
+<body>
+<div id="sk"></div>
+
+<div id="round-display">
+    <div>Round</div>
+    <div class="round-num" id="rnum">0</div>
+    <div class="phase" id="rphase">initializing…</div>
+</div>
+
+<div id="ui">
+    <button class="btn" id="btn-restart" onclick="restartSim()">↺ Restart</button>
+    <button class="btn" id="btn-pause" onclick="togglePause()">⏸ Pause</button>
+    <button class="btn" onclick="changeNodes(-2)">− Nodes</button>
+    <button class="btn" onclick="changeNodes(2)">+ Nodes</button>
+</div>
+
+<div id="legend">
+    <div><span class="dot" style="background:#e8972a"></span>Color 1  (final output)</div>
+    <div><span class="dot" style="background:#4ecdc4"></span>Color 2  (final output)</div>
+    <div><span class="dot" style="background:#c084fc"></span>Color 3  (final output)</div>
+    <div><span class="dot" style="background:#3a7bd5"></span>Color > 3 (still running)</div>
+    <div style="margin-top:4px; color:rgba(140,160,180,0.5)">
+        Purple pills = port numbers<br>
+        Gold ring = sending message<br>
+        White flash = updating color
+    </div>
+</div>
+
+<div id="caption">
+    init: color = input color &nbsp;·&nbsp;
+    send: broadcast current color &nbsp;·&nbsp;
+    <em>receive: switch to g(neighbor colors) if local maximum</em>
+</div>
+
+<script>
+// ─── Color palette mapped to color numbers ─────────────────
+// Colors 1,2,3 = final outputs (warm/teal/purple)
+// Colors 4+ = still running (blue shades)
+function colorForNum(c) {
+    if (c === 1) return { r: 232, g: 151, b: 42  };   // amber
+    if (c === 2) return { r: 78,  g: 205, b: 196 };   // teal
+    if (c === 3) return { r: 192, g: 132, b: 252 };   // purple
+    // 4–9+: blue spectrum
+    let t = Math.min((c - 4) / 8, 1);
+    return {
+        r: Math.round(80  + t * 40),
+        g: Math.round(130 + t * -50),
+        b: Math.round(230 + t * -60),
+    };
+}
+
+// ─── g(X) — smallest positive integer not in X ────────────
+function gFunc(neighborColors) {
+    let s = new Set(neighborColors);
+    let i = 1;
+    while (s.has(i)) i++;
+    return i;
+}
+
+// ─── Simulation state ──────────────────────────────────────
+let PATH_LENGTH = 10;
+let nodes = [];       // { color, nextColor, x, y, stopped, sendAnim, recvAnim, portL, portR }
+let round = 0;
+let phase = 'idle';   // idle | sending | receiving | done
+let phaseTimer = 0;
+const PHASE_TICKS = 90; // frames per phase
+let paused = false;
+let allDone = false;
+let W, H;
+
+// Floating message particles
+let messages = []; // { fromX, fromY, toX, toY, t, color, text }
+
+new p5(function(p) {
+
+    p.setup = function() {
+        W = window.innerWidth; H = window.innerHeight;
+        p.createCanvas(W, H).parent('sk');
+        p.colorMode(p.RGB);
+        initSim();
+    };
+
+    p.windowResized = function() {
+        W = window.innerWidth; H = window.innerHeight;
+        p.resizeCanvas(W, H);
+        layoutNodes();
+    };
+
+    p.draw = function() {
+        drawBackground(p);
+        drawEdges(p);
+        drawMessages(p);
+        drawNodes(p);
+        drawStateLabels(p);
+        if (!paused && !allDone) tickSim(p);
+    };
+
+    // ── Background ─────────────────────────────────────────
+    function drawBackground(p) {
+        p.background(15, 17, 23);
+        // Subtle grid
+        p.stroke(255, 255, 255, 6);
+        p.strokeWeight(0.5);
+        let gs = 48;
+        for (let x = 0; x < W; x += gs) p.line(x, 0, x, H);
+        for (let y = 0; y < H; y += gs) p.line(0, y, W, y);
+    }
+
+    // ── Edges ──────────────────────────────────────────────
+    function drawEdges(p) {
+        for (let i = 0; i < nodes.length - 1; i++) {
+            let a = nodes[i], b = nodes[i+1];
+            // Port label on a side (port 1 = right for non-endpoints, right only for left endpoint)
+            let portA = (i === 0) ? 1 : 2;  // right port of a
+            let portB = (i + 1 === nodes.length - 1) ? 1 : 1; // left port of b
+
+            p.stroke(40, 55, 75);
+            p.strokeWeight(1.5);
+            p.line(a.x, a.y, b.x, b.y);
+
+            // Port number tags
+            drawPortTag(p, a.x, a.y, b.x, b.y, portA, true);
+            drawPortTag(p, b.x, b.y, a.x, a.y, portB, false);
+        }
+    }
+
+    function drawPortTag(p, fx, fy, tx, ty, num, isRight) {
+        let d = p.dist(fx, fy, tx, ty);
+        if (d < 2) return;
+        let frac = 0.22;
+        let lx = p.lerp(fx, tx, frac);
+        let ly = p.lerp(fy, ty, frac);
+        let dx = tx - fx, dy = ty - fy;
+        lx += (-dy/d) * 9; ly += (dx/d) * 9;
+
+        p.noStroke();
+        p.fill(50, 30, 90, 200);
+        p.rectMode(p.CENTER); p.rect(lx, ly, 14, 11, 3); p.rectMode(p.CORNER);
+        p.fill(170, 120, 240, 220);
+        p.textFont('Courier New'); p.textSize(8.5);
+        p.textAlign(p.CENTER, p.CENTER);
+        p.text(num, lx, ly);
+    }
+
+    // ── Message particles ──────────────────────────────────
+    function drawMessages(p) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            let m = messages[i];
+            m.t += 0.022;
+            if (m.t >= 1) { messages.splice(i, 1); continue; }
+
+            let ease = m.t < 0.5 ? 2*m.t*m.t : 1-Math.pow(-2*m.t+2,2)/2;
+            let mx = p.lerp(m.fromX, m.toX, ease);
+            let my = p.lerp(m.fromY - 28, m.toY - 28, ease);
+            let alpha = m.t < 0.15 ? m.t/0.15 : m.t > 0.85 ? (1-m.t)/0.15 : 1;
+            alpha = Math.min(alpha, 1);
+
+            let c = colorForNum(m.colorVal);
+            // Glow
+            p.noStroke();
+            p.fill(c.r, c.g, c.b, 40 * alpha); p.circle(mx, my, 22);
+            p.fill(c.r, c.g, c.b, 120 * alpha); p.circle(mx, my, 13);
+            p.fill(c.r, c.g, c.b, 220 * alpha); p.circle(mx, my, 7);
+
+            // Color number
+            p.fill(255, 255, 255, 200 * alpha);
+            p.textFont('Courier New'); p.textSize(9);
+            p.textAlign(p.CENTER, p.CENTER);
+            p.text(m.colorVal, mx, my);
+        }
+    }
+
+    // ── Nodes ──────────────────────────────────────────────
+    function drawNodes(p) {
+        for (let i = 0; i < nodes.length; i++) {
+            let n = nodes[i];
+            let c = colorForNum(n.color);
+            let NR = 28;
+
+            // Stopped glow
+            if (n.stopped) {
+                p.noStroke();
+                p.fill(c.r, c.g, c.b, 28); p.circle(n.x, n.y, NR * 3.4);
+            }
+
+            // Send ring animation
+            if (n.sendAnim > 0) {
+                let prog = 1 - n.sendAnim / 25;
+                let ringR = NR * (1.4 + prog * 1.8);
+                p.noStroke();
+                p.fill(255, 215, 80, (1 - prog) * 70);
+                p.circle(n.x, n.y, ringR * 2);
+                n.sendAnim--;
+            }
+
+            // Receive flash
+            if (n.recvAnim > 0) {
+                let prog = n.recvAnim / 20;
+                p.noStroke();
+                p.fill(255, 255, 255, prog * 100);
+                p.circle(n.x, n.y, NR * 2.5);
+                n.recvAnim--;
+            }
+
+            // Node body
+            p.stroke(n.stopped ? p.color(c.r, c.g, c.b, 200) : p.color(c.r * 0.6, c.g * 0.6, c.b * 0.6, 180));
+            p.strokeWeight(n.stopped ? 2.5 : 1.8);
+            p.fill(p.color(Math.round(c.r * 0.15 + 12), Math.round(c.g * 0.15 + 14), Math.round(c.b * 0.15 + 20)));
+            p.circle(n.x, n.y, NR * 2);
+
+            // Color number inside
+            p.noStroke();
+            p.fill(c.r, c.g, c.b, n.stopped ? 255 : 180);
+            p.textFont('Courier New');
+            p.textSize(n.color >= 10 ? 13 : 15);
+            p.textStyle(p.BOLD);
+            p.textAlign(p.CENTER, p.CENTER);
+            p.text(n.color, n.x, n.y);
+            p.textStyle(p.NORMAL);
+
+            // Stopped checkmark
+            if (n.stopped) {
+                p.fill(c.r, c.g, c.b, 200);
+                p.textSize(9); p.textAlign(p.CENTER, p.TOP);
+                p.text('✓ done', n.x, n.y + NR + 3);
+            }
+
+            // Node index label (tiny)
+            p.fill(100, 120, 140, 100);
+            p.textSize(8); p.textAlign(p.CENTER, p.BOTTOM);
+            p.text('v' + i, n.x, n.y - NR - 2);
+        }
+    }
+
+    // ── State labels floating above path ──────────────────
+    function drawStateLabels(p) {
+        // Phase indicator strip
+        p.noStroke();
+        let phaseColors = { sending: [255, 215, 80], receiving: [100, 200, 255], idle: [150, 150, 180], done: [100, 220, 150] };
+        let pc = phaseColors[phase] || [150, 150, 180];
+        p.fill(pc[0], pc[1], pc[2], 18);
+        p.rect(0, H / 2 - 80, W, 160);
+
+        // Phase tick bar
+        if (phase !== 'idle' && phase !== 'done') {
+            let prog = 1 - phaseTimer / PHASE_TICKS;
+            p.fill(pc[0], pc[1], pc[2], 35);
+            p.rect(0, H - 5, W * prog, 5);
+        }
+    }
+
+    // ── Simulation logic ───────────────────────────────────
+    function tickSim(p) {
+        phaseTimer--;
+
+        if (phase === 'idle') {
+            // Kick off round
+            if (phaseTimer <= 0) {
+                if (allDone) return;
+                round++;
+                document.getElementById('rnum').textContent = round;
+                phase = 'sending';
+                phaseTimer = PHASE_TICKS;
+                document.getElementById('rphase').textContent = 'send phase';
+
+                // Compute what each node WILL send and animate
+                messages = [];
+                for (let i = 0; i < nodes.length; i++) {
+                    let n = nodes[i];
+                    if (n.stopped) continue;
+                    n.sendAnim = 25;
+                    // Send to left neighbor
+                    if (i > 0) messages.push({ fromX: n.x, fromY: n.y, toX: nodes[i-1].x, toY: nodes[i-1].y, t: 0, colorVal: n.color });
+                    // Send to right neighbor
+                    if (i < nodes.length - 1) messages.push({ fromX: n.x, fromY: n.y, toX: nodes[i+1].x, toY: nodes[i+1].y, t: 0, colorVal: n.color });
+                }
+            }
+
+        } else if (phase === 'sending') {
+            if (phaseTimer <= 0) {
+                phase = 'receiving';
+                phaseTimer = PHASE_TICKS;
+                document.getElementById('rphase').textContent = 'receive + update';
+
+                // Compute next colors
+                for (let i = 0; i < nodes.length; i++) {
+                    let n = nodes[i];
+                    if (n.stopped) continue;
+
+                    let neighborColors = [];
+                    if (i > 0) neighborColors.push(nodes[i-1].color);
+                    if (i < nodes.length - 1) neighborColors.push(nodes[i+1].color);
+
+                    let maxNeighbor = Math.max(...neighborColors);
+                    if (n.color > 3 && n.color > maxNeighbor) {
+                        // This node is local max and not yet in {1,2,3} → update
+                        n.nextColor = gFunc(neighborColors);
+                        n.recvAnim = 20;
+                    } else {
+                        n.nextColor = n.color;
+                        // Check if done
+                        if (n.color <= 3) {
+                            // Check neighbors also done/valid
+                            let conflicted = neighborColors.some(nc => nc === n.color);
+                            if (!conflicted) n.stopped = true;
+                        }
+                    }
+                }
+            }
+
+        } else if (phase === 'receiving') {
+            if (phaseTimer <= 0) {
+                // Apply next colors
+                for (let n of nodes) {
+                    if (!n.stopped) n.color = n.nextColor;
+                }
+                // Re-check stopped
+                for (let i = 0; i < nodes.length; i++) {
+                    let n = nodes[i];
+                    if (n.color <= 3 && !n.stopped) {
+                        let neighborColors = [];
+                        if (i > 0) neighborColors.push(nodes[i-1].color);
+                        if (i < nodes.length - 1) neighborColors.push(nodes[i+1].color);
+                        if (!neighborColors.some(nc => nc === n.color)) n.stopped = true;
+                    }
+                }
+
+                allDone = nodes.every(n => n.stopped);
+                if (allDone) {
+                    phase = 'done';
+                    document.getElementById('rphase').textContent = '✓ all nodes stopped';
+                    document.getElementById('btn-pause').classList.remove('active');
+                } else {
+                    phase = 'idle';
+                    phaseTimer = 35; // brief pause before next round
+                    document.getElementById('rphase').textContent = 'waiting…';
+                }
+            }
+        }
+    }
+
+}, 'sk');
+
+// ─── Init / layout ─────────────────────────────────────────
+function initSim() {
+    round = 0;
+    phase = 'idle';
+    phaseTimer = 60;
+    allDone = false;
+    messages = [];
+    document.getElementById('rnum').textContent = '0';
+    document.getElementById('rphase').textContent = 'initializing…';
+    document.getElementById('btn-pause').textContent = '⏸ Pause';
+    document.getElementById('btn-pause').classList.remove('active');
+    paused = false;
+
+    // Assign random initial colors (large numbers, simulating "any coloring")
+    // Use a fixed seed for reproducibility
+    let initColors = [7, 3, 9, 2, 11, 5, 8, 4, 13, 6, 10, 15];
+    nodes = [];
+    for (let i = 0; i < PATH_LENGTH; i++) {
+        nodes.push({
+            color: initColors[i % initColors.length],
+            nextColor: 0,
+            x: 0, y: 0,
+            stopped: false,
+            sendAnim: 0,
+            recvAnim: 0,
+        });
+    }
+    layoutNodes();
+}
+
+function layoutNodes() {
+    let W = window.innerWidth, H = window.innerHeight;
+    let margin = 90;
+    let spacing = (W - margin * 2) / (PATH_LENGTH - 1);
+    for (let i = 0; i < nodes.length; i++) {
+        nodes[i].x = margin + i * spacing;
+        nodes[i].y = H / 2;
+    }
+}
+
+function restartSim() {
+    initSim();
+}
+
+function togglePause() {
+    paused = !paused;
+    let btn = document.getElementById('btn-pause');
+    btn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+    btn.classList.toggle('active', paused);
+}
+
+function changeNodes(delta) {
+    PATH_LENGTH = Math.max(4, Math.min(16, PATH_LENGTH + delta));
+    initSim();
+}
+</script>
+</body>
+</html>

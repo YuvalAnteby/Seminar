@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bipartite Maximal Matching — Section 3.5</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#08101c;overflow:hidden;width:100vw;height:100vh;font-family:'Courier New',monospace;}
+canvas{display:block;}
+
+#hud{
+  position:absolute;top:18px;left:22px;
+  color:rgba(175,205,235,.72);font-size:11px;line-height:2.1;
+}
+#hud .rn{font-size:24px;color:rgba(222,238,255,.92);font-weight:bold;letter-spacing:1px;}
+#hud .ph{font-size:10px;color:rgba(128,162,200,.62);letter-spacing:.05em;margin-top:2px;}
+
+#state-row{
+  position:absolute;top:18px;left:50%;transform:translateX(-50%);
+  display:flex;gap:20px;align-items:center;
+  font-size:9.5px;color:rgba(148,175,208,.58);
+  white-space:nowrap;
+}
+.sk{display:flex;align-items:center;gap:5px;}
+.sq{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;}
+
+#btns{
+  position:absolute;top:16px;right:20px;
+  display:flex;gap:8px;
+}
+.b{
+  padding:6px 14px;border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.04);color:rgba(208,218,230,.8);
+  font-family:'Courier New',monospace;font-size:10.5px;
+  cursor:pointer;border-radius:5px;transition:all .18s;
+}
+.b:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.26);}
+.b.on{background:rgba(100,185,255,.12);border-color:rgba(100,185,255,.42);color:#9fd0ff;}
+
+#leg{
+  position:absolute;bottom:38px;left:22px;
+  font-size:9.5px;color:rgba(148,178,212,.58);line-height:2;
+}
+.ldot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+
+#cap{
+  position:absolute;bottom:13px;left:0;right:0;text-align:center;
+  font-family:'Georgia',serif;font-size:12px;
+  color:rgba(148,182,218,.46);pointer-events:none;letter-spacing:.02em;
+}
+#cap em{color:rgba(255,195,72,.80);font-style:italic;}
+</style>
+</head>
+<body>
+<div id="cv"></div>
+
+<div id="hud">
+  <div>Round</div>
+  <div class="rn" id="rn">0</div>
+  <div class="ph" id="ph">initializing…</div>
+</div>
+
+<div id="state-row">
+  <div class="sk"><span class="sq" style="background:#1e3010;border:1.5px solid #6aaa30"></span>UR — unmatched, running</div>
+  <div class="sk"><span class="sq" style="background:#183040;border:1.5px solid #38aacc"></span>MR(i) — matched, running</div>
+  <div class="sk"><span class="sq" style="background:#0e1820;border:1.5px dashed #2a5a78"></span>US — unmatched, stopped</div>
+  <div class="sk"><span class="sq" style="background:#280e50;border:2px solid #8840e8"></span>MS(i) — matched, stopped</div>
+</div>
+
+<div id="btns">
+  <button class="b" onclick="restart()">↺ Restart</button>
+  <button class="b" id="bp" onclick="togglePause()">⏸ Pause</button>
+  <button class="b" onclick="ch(-1)">− Pairs</button>
+  <button class="b" onclick="ch(1)">+ Pairs</button>
+</div>
+
+<div id="leg">
+  <div>○ <span style="color:#d4c040">White node</span> — proposes</div>
+  <div>● <span style="color:#6090d0">Black node</span> — accepts</div>
+  <div>→ <span style="color:#ffb030">Orange</span> arrow = proposal msg</div>
+  <div>← <span style="color:#38d090">Green</span> arrow = accept msg</div>
+  <div>— <span style="color:#8848cc">Purple</span> arrow = matched broadcast</div>
+  <div style="margin-top:4px;color:rgba(120,150,185,.45)">
+    Gold pills = white port nums<br>
+    Blue pills  = black port nums<br>
+    Glowing edge = matched pair ✓
+  </div>
+</div>
+
+<div id="cap">
+  Odd rounds: white proposes to port k &nbsp;·&nbsp;
+  Even rounds: black accepts min-port proposal &nbsp;·&nbsp;
+  <em>Guaranteed to stop in 2Δ + 1 rounds</em>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  GRAPH + SIMULATION STATE
+// ═══════════════════════════════════════════════════════════
+let PAIRS = 5;
+
+// Node objects
+// white: { x,y, state:'UR'|'MR'|'US'|'MS', k, matchedEdge, pa,ra,ga }
+// black: { x,y, state:'UR'|'MR'|'US'|'MS', M, X, matchedEdge, pa,ra,ga }
+// M = set of incoming proposal portB values this round
+// X = set of still-viable portB values
+
+let whites = [];
+let blacks = [];
+
+// Edge list: { wi, bi, portW (1-based on white), portB (1-based on black) }
+let edges = [];
+
+// adjW[wi] = edges involving white wi, sorted by portW
+// adjB[bi] = edges involving black bi, sorted by portB
+let adjW = [], adjB = [];
+
+// Matched edge indices
+let matched = new Set();
+
+// Flying message particles
+// { fx,fy,tx,ty, t, type:'proposal'|'accept'|'matched', label, col }
+let msgs = [];
+
+// Simulation timing
+let round   = 0;
+let phase   = 'idle';   // idle | odd-flying | odd-deliver | even-flying | even-deliver | done
+let pt      = 0;
+const PT_FLY     = 95;  // frames for messages to fly
+const PT_DELIVER = 18;  // frames to pause after delivery
+let paused  = false;
+let simDone = false;
+
+// ═══════════════════════════════════════════════════════════
+//  BUILD GRAPH
+// ═══════════════════════════════════════════════════════════
+function seededRng(seed) {
+  let s = seed;
+  return () => { s = Math.imul(1664525, s) + 1013904223 | 0; return (s >>> 0) / 4294967296; };
+}
+
+function buildGraph() {
+  whites = []; blacks = []; edges = []; adjW = []; adjB = [];
+  matched = new Set();
+
+  const W = window.innerWidth, H = window.innerHeight;
+  const n = PAIRS;
+  const usableH = H - 195;
+  const lx = W / 2 - Math.min(W * 0.27, 215);
+  const rx = W / 2 + Math.min(W * 0.27, 215);
+
+  for (let i = 0; i < n; i++) {
+    const y = 105 + (i + 0.5) * (usableH / n);
+    whites.push({ x: lx, y, state: 'UR', k: 0, matchedEdge: -1, pa: 0, ra: 0, ga: 0 });
+    blacks.push({ x: rx, y, state: 'UR', M: [], X: [], matchedEdge: -1, pa: 0, ra: 0, ga: 0 });
+    adjW.push([]); adjB.push([]);
+  }
+
+  const rng = seededRng(31 + PAIRS * 13);
+  const seen = new Set();
+
+  function addEdge(wi, bi) {
+    const key = `${wi}_${bi}`;
+    if (seen.has(key) || wi < 0 || bi < 0 || wi >= n || bi >= n) return;
+    seen.add(key);
+    const portW = adjW[wi].length + 1;
+    const portB = adjB[bi].length + 1;
+    const ei = edges.length;
+    edges.push({ wi, bi, portW, portB });
+    adjW[wi].push(ei);
+    adjB[bi].push(ei);
+    blacks[bi].X.push(portB);
+  }
+
+  // Guarantee: each white connects to at least the same-index black
+  for (let i = 0; i < n; i++) addEdge(i, i);
+  // Neighbours
+  for (let i = 0; i < n; i++) {
+    if (i > 0)     addEdge(i, i - 1);
+    if (i < n - 1) addEdge(i, i + 1);
+  }
+  // Random extras (2-skip)
+  for (let i = 0; i < n; i++) {
+    if (rng() > 0.5 && i + 2 < n) addEdge(i, i + 2);
+    if (rng() > 0.6 && i > 2)     addEdge(i, i - 2);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════
+function initSim() {
+  round = 0; phase = 'idle'; pt = 62;
+  paused = false; simDone = false; msgs = [];
+  set('rn', '0'); set('ph', 'initializing…');
+  document.getElementById('bp').textContent = '⏸ Pause';
+  document.getElementById('bp').classList.remove('on');
+  buildGraph();
+}
+
+function set(id, v) { document.getElementById(id).textContent = v; }
+
+function restart() { initSim(); }
+function togglePause() {
+  paused = !paused;
+  const b = document.getElementById('bp');
+  b.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  b.classList.toggle('on', paused);
+}
+function ch(d) { PAIRS = Math.max(3, Math.min(8, PAIRS + d)); initSim(); }
+
+// ═══════════════════════════════════════════════════════════
+//  SIMULATION TICK  (implements Table 3.1 exactly)
+// ═══════════════════════════════════════════════════════════
+function tick() {
+  pt--;
+  if (pt > 0) return;
+
+  // ── IDLE: start next round ──────────────────────────────
+  if (phase === 'idle') {
+    round++;
+    set('rn', round);
+    const k = Math.ceil(round / 2);
+    msgs = [];
+
+    if (round % 2 === 1) {
+      // ODD round 2k−1: white nodes act
+      set('ph', `Round ${round}  (odd 2·${k}−1) — white nodes`);
+      for (let wi = 0; wi < PAIRS; wi++) {
+        const w = whites[wi];
+        if (w.state === 'UR') {
+          if (k <= adjW[wi].length) {
+            // Propose to k-th port (1-indexed)
+            const ei = adjW[wi][k - 1];
+            const e  = edges[ei];
+            const b  = blacks[e.bi];
+            w.pa = 28;
+            spawnMsg(w.x, w.y, b.x, b.y, 'proposal', `prop`, [255, 165, 38], { wi, bi: e.bi, portB: e.portB });
+          } else {
+            // Exhausted all ports
+            w.state = 'US';
+          }
+        } else if (w.state === 'MR') {
+          // Broadcast 'matched' to all ports, then stop
+          w.pa = 18;
+          for (const ei of adjW[wi]) {
+            const e = edges[ei];
+            const b = blacks[e.bi];
+            spawnMsg(w.x, w.y, b.x, b.y, 'bcast', `mtch`, [155, 100, 235], { wi, bi: e.bi, portB: e.portB });
+          }
+          w.state = 'MS';
+        }
+      }
+      phase = 'odd-flying'; pt = PT_FLY;
+
+    } else {
+      // EVEN round 2k: black nodes act
+      set('ph', `Round ${round}  (even 2·${k}) — black nodes`);
+      for (let bi = 0; bi < PAIRS; bi++) {
+        const b = blacks[bi];
+        if (b.state !== 'UR') continue;
+
+        if (b.M.length > 0) {
+          // Accept the proposal from the minimum port number
+          const minPort = Math.min(...b.M);
+          const ei = adjB[bi].find(ei => edges[ei].portB === minPort);
+          if (ei !== undefined) {
+            const e = edges[ei];
+            const w = whites[e.wi];
+            b.state = 'MS'; b.matchedEdge = ei; b.ra = 28;
+            matched.add(ei);
+            spawnMsg(b.x, b.y, w.x, w.y, 'accept', `acpt`, [45, 210, 138], { wi: e.wi, bi, portW: e.portW });
+          }
+          b.M = [];
+        } else if (b.X.length === 0) {
+          b.state = 'US';
+        }
+        b.M = [];
+      }
+      phase = 'even-flying'; pt = PT_FLY;
+    }
+    return;
+  }
+
+  // ── ODD messages land ───────────────────────────────────
+  if (phase === 'odd-flying') {
+    // Deliver proposals and matched broadcasts to black nodes
+    for (const m of msgs) {
+      if (m.type === 'proposal') {
+        const b = blacks[m.meta.bi];
+        if (b.state === 'UR' && b.X.includes(m.meta.portB)) {
+          b.M.push(m.meta.portB);
+          b.ra = 12;
+        }
+      } else if (m.type === 'bcast') {
+        const b = blacks[m.meta.bi];
+        b.X = b.X.filter(x => x !== m.meta.portB);
+        b.ga = 10;
+      }
+    }
+    msgs = [];
+    phase = 'odd-deliver'; pt = PT_DELIVER;
+    set('ph', 'messages delivered — black nodes process…');
+    return;
+  }
+
+  // ── Brief pause, then start even round ─────────────────
+  if (phase === 'odd-deliver') {
+    phase = 'idle'; pt = 0; return;
+  }
+
+  // ── EVEN messages land ──────────────────────────────────
+  if (phase === 'even-flying') {
+    for (const m of msgs) {
+      if (m.type === 'accept') {
+        const w = whites[m.meta.wi];
+        if (w.state === 'UR') {
+          w.state = 'MR'; w.matchedEdge = adjW[m.meta.wi].find(ei => edges[ei].bi === m.meta.bi) ?? -1;
+          w.ra = 26;
+        }
+      }
+    }
+    msgs = [];
+    phase = 'even-deliver'; pt = PT_DELIVER;
+
+    // Check termination
+    simDone = whites.every(w => w.state === 'US' || w.state === 'MS')
+           && blacks.every(b => b.state === 'US' || b.state === 'MS');
+    if (simDone) {
+      set('ph', `✓  maximal matching — ${matched.size} edge${matched.size !== 1 ? 's' : ''} matched`);
+      phase = 'done';
+    } else {
+      set('ph', 'accept messages delivered — white nodes update…');
+    }
+    return;
+  }
+
+  if (phase === 'even-deliver') { phase = 'idle'; pt = 0; }
+}
+
+// ─── Spawn a flying message ─────────────────────────────────
+function spawnMsg(fx, fy, tx, ty, type, label, col, meta) {
+  msgs.push({ fx, fy, tx, ty, t: 0, type, label, col, meta });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  P5 SKETCH
+// ═══════════════════════════════════════════════════════════
+new p5(function(p) {
+
+  p.setup = function() {
+    p.createCanvas(window.innerWidth, window.innerHeight).parent('cv');
+    p.colorMode(p.RGB);
+    initSim();
+  };
+
+  p.windowResized = function() {
+    p.resizeCanvas(window.innerWidth, window.innerHeight);
+    buildGraph();
+  };
+
+  p.draw = function() {
+    drawBg(p);
+    drawColLabels(p);
+    drawMatchedEdges(p);
+    drawAllEdges(p);
+    updateAndDrawMsgs(p);
+    drawWhites(p);
+    drawBlacks(p);
+    drawPhaseBar(p);
+    if (!paused && !simDone) tick();
+  };
+
+  // ── Background ──────────────────────────────────────────
+  function drawBg(p) {
+    p.background(8, 16, 28);
+    p.stroke(255, 255, 255, 5); p.strokeWeight(0.5);
+    const gs = 46;
+    for (let x = 0; x < p.width;  x += gs) p.line(x, 0, x, p.height);
+    for (let y = 0; y < p.height; y += gs) p.line(0, y, p.width, y);
+  }
+
+  function drawColLabels(p) {
+    const lx = whites.length ? whites[0].x : p.width * 0.35;
+    const rx = blacks.length ? blacks[0].x : p.width * 0.65;
+    p.noStroke(); p.textFont('Courier New'); p.textSize(11); p.textAlign(p.CENTER, p.BOTTOM);
+    p.fill(210, 195, 80, 55); p.text('WHITE  (proposes)', lx, 88);
+    p.fill(88, 148, 220, 55); p.text('BLACK  (accepts)',  rx, 88);
+  }
+
+  // ── Matched edges (glowing) ─────────────────────────────
+  function drawMatchedEdges(p) {
+    for (const ei of matched) {
+      const e  = edges[ei];
+      const wx = whites[e.wi].x, wy = whites[e.wi].y;
+      const bx = blacks[e.bi].x, by = blacks[e.bi].y;
+      p.stroke(50, 200, 120, 28);  p.strokeWeight(14); p.line(wx, wy, bx, by);
+      p.stroke(50, 200, 120, 65);  p.strokeWeight(5);  p.line(wx, wy, bx, by);
+      p.stroke(95, 238, 158, 165); p.strokeWeight(1.5); p.line(wx, wy, bx, by);
+    }
+  }
+
+  // ── Unmatched edges ─────────────────────────────────────
+  function drawAllEdges(p) {
+    for (let ei = 0; ei < edges.length; ei++) {
+      if (matched.has(ei)) continue;
+      const e  = edges[ei];
+      const wx = whites[e.wi].x, wy = whites[e.wi].y;
+      const bx = blacks[e.bi].x, by = blacks[e.bi].y;
+      p.stroke(26, 42, 65); p.strokeWeight(1.2); p.line(wx, wy, bx, by);
+      portTag(p, wx, wy, bx, by, e.portW, true);
+      portTag(p, bx, by, wx, wy, e.portB, false);
+    }
+  }
+
+  function portTag(p, fx, fy, tx, ty, num, isW) {
+    const d = p.dist(fx, fy, tx, ty) || 1;
+    const f = Math.min(30 / d, 0.40);
+    let lx = p.lerp(fx, tx, f), ly = p.lerp(fy, ty, f);
+    const dx = tx - fx, dy = ty - fy;
+    lx += (-dy / d) * 9; ly += (dx / d) * 9;
+    p.noStroke();
+    p.fill(isW ? p.color(52, 36, 8, 195) : p.color(10, 25, 52, 195));
+    p.rectMode(p.CENTER); p.rect(lx, ly, 14, 11, 3); p.rectMode(p.CORNER);
+    p.fill(isW ? p.color(215, 178, 50, 220) : p.color(88, 162, 235, 220));
+    p.textFont('Courier New'); p.textSize(8.5); p.textAlign(p.CENTER, p.CENTER);
+    p.text(num, lx, ly);
+  }
+
+  // ── Flying messages ─────────────────────────────────────
+  function updateAndDrawMsgs(p) {
+    // Advance t for flying phases only
+    const flying = phase === 'odd-flying' || phase === 'even-flying';
+    for (const m of msgs) {
+      if (flying) m.t = Math.min(1, m.t + 0.018);
+      const ease = m.t < 0.5 ? 2*m.t*m.t : 1 - Math.pow(-2*m.t+2,2)/2;
+      const mx = p.lerp(m.fx, m.tx, ease);
+      const my = p.lerp(m.fy, m.ty, ease);
+      const al = Math.min(1, m.t < 0.12 ? m.t/0.12 : m.t > 0.88 ? (1-m.t)/0.12 : 1);
+      if (al <= 0) continue;
+
+      // Arrow tail
+      const dx = m.tx - m.fx, dy = m.ty - m.fy, len = Math.sqrt(dx*dx+dy*dy)||1;
+      const tail = 20 * (1 - Math.abs(m.t - 0.5) * 0.4);
+      p.stroke(m.col[0], m.col[1], m.col[2], 155 * al); p.strokeWeight(1.6);
+      p.line(mx - dx/len*tail*Math.min(ease,0.9), my - dy/len*tail*Math.min(ease,0.9), mx, my);
+
+      // Glow
+      p.noStroke();
+      p.fill(m.col[0], m.col[1], m.col[2], 28 * al);  p.circle(mx, my, 26);
+      p.fill(m.col[0], m.col[1], m.col[2], 95 * al);  p.circle(mx, my, 14);
+      p.fill(m.col[0], m.col[1], m.col[2], 215 * al); p.circle(mx, my, 7);
+      p.fill(255, 255, 255, 195 * al);
+      p.textFont('Courier New'); p.textSize(7.5); p.textAlign(p.CENTER, p.CENTER);
+      p.text(m.label, mx, my - 9.5);
+    }
+  }
+
+  // ── Glow helper ─────────────────────────────────────────
+  function glowAt(p, x, y, r, c, a) {
+    p.noStroke();
+    p.fill(c[0], c[1], c[2], a * 0.30); p.circle(x, y, r * 4.0);
+    p.fill(c[0], c[1], c[2], a * 0.65); p.circle(x, y, r * 2.4);
+  }
+
+  // ── White nodes ─────────────────────────────────────────
+  function drawWhites(p) {
+    const NR = 24;
+    for (let wi = 0; wi < whites.length; wi++) {
+      const w = whites[wi], s = w.state;
+
+      // Colors per state
+      const fc = s==='MS'?[68,28,140]:s==='MR'?[28,100,62]:s==='US'?[10,18,32]:[32,30,6];
+      const sc = s==='MS'?[132,58,228]:s==='MR'?[45,192,108]:s==='US'?[38,58,92]:[195,172,48];
+      const sw = (s==='MS'||s==='MR') ? 2.5 : s==='US' ? 1.0 : 1.8;
+
+      // Anims
+      if (w.ra > 0) { glowAt(p, w.x, w.y, NR, [45,208,128], (w.ra/28)*255); w.ra--; }
+      if (w.pa > 0) { glowAt(p, w.x, w.y, NR, [255,172,38], (w.pa/28)*255); w.pa--; }
+
+      // Body
+      if (s === 'US') {
+        p.noFill(); p.stroke(sc[0],sc[1],sc[2],105); p.strokeWeight(1.1);
+        for (let a=0; a<p.TWO_PI; a+=p.PI/5)
+          p.arc(w.x, w.y, NR*2, NR*2, a, a+p.PI/7);
+        p.noStroke(); p.fill(fc[0],fc[1],fc[2],155); p.circle(w.x, w.y, NR*1.72);
+      } else {
+        p.stroke(sc[0],sc[1],sc[2]); p.strokeWeight(sw);
+        p.fill(fc[0],fc[1],fc[2]);   p.circle(w.x, w.y, NR*2);
+      }
+
+      // Inner marker: white = open circle
+      p.noStroke();
+      p.fill(sc[0], sc[1], sc[2], s==='UR'?170:70);
+      p.circle(w.x, w.y, NR*0.58);
+
+      // State label
+      p.fill(sc[0],sc[1],sc[2],200);
+      p.textFont('Courier New'); p.textSize(8.5); p.textAlign(p.CENTER, p.CENTER);
+      let lbl = s;
+      if ((s==='MS'||s==='MR') && w.matchedEdge >= 0) {
+        const e = edges[w.matchedEdge]; if (e) lbl += '(' + e.portW + ')';
+      }
+      p.text(lbl, w.x, w.y);
+
+      // Degree + k below
+      p.fill(90,115,148,82); p.textSize(7.5); p.textAlign(p.CENTER, p.TOP);
+      p.text('Δ='+adjW[wi].length, w.x, w.y+NR+2);
+      if (s === 'UR') {
+        p.fill(110,138,170,65); p.textSize(7); p.textAlign(p.CENTER, p.TOP);
+        p.text('next→p'+(Math.ceil(round/2)+1), w.x, w.y+NR+12);
+      }
+
+      // Node id
+      p.fill(88,108,135,75); p.textSize(7.5); p.textAlign(p.CENTER, p.BOTTOM);
+      p.text('w'+wi, w.x, w.y-NR-2);
+
+      if (s === 'MS') {
+        p.fill(sc[0],sc[1],sc[2],175); p.textSize(8.5); p.textAlign(p.CENTER, p.TOP);
+        p.text('✓', w.x, w.y+NR+2);
+      }
+    }
+  }
+
+  // ── Black nodes ─────────────────────────────────────────
+  function drawBlacks(p) {
+    const NR = 24;
+    for (let bi = 0; bi < blacks.length; bi++) {
+      const b = blacks[bi], s = b.state;
+
+      const fc = s==='MS'?[38,15,78]:s==='US'?[8,15,30]:[8,18,42];
+      const sc = s==='MS'?[120,52,205]:s==='US'?[36,58,92]:[52,108,178];
+      const sw = s==='MS' ? 2.5 : s==='US' ? 1.0 : 1.8;
+
+      if (b.ra > 0) { glowAt(p, b.x, b.y, NR, s==='MS'?[120,52,205]:[45,208,128], (b.ra/28)*255); b.ra--; }
+      if (b.ga > 0) { glowAt(p, b.x, b.y, NR, [155,100,235], (b.ga/10)*180); b.ga--; }
+
+      if (s === 'US') {
+        p.noFill(); p.stroke(sc[0],sc[1],sc[2],100); p.strokeWeight(1.1);
+        for (let a=0; a<p.TWO_PI; a+=p.PI/5)
+          p.arc(b.x, b.y, NR*2, NR*2, a, a+p.PI/7);
+        p.noStroke(); p.fill(fc[0],fc[1],fc[2],152); p.circle(b.x, b.y, NR*1.72);
+      } else {
+        p.stroke(sc[0],sc[1],sc[2]); p.strokeWeight(sw);
+        p.fill(fc[0],fc[1],fc[2]);   p.circle(b.x, b.y, NR*2);
+      }
+
+      // Inner marker: black = filled square
+      p.noStroke(); p.fill(sc[0],sc[1],sc[2], s==='UR'?155:65);
+      p.rectMode(p.CENTER); p.rect(b.x, b.y, NR*0.52, NR*0.52, 2); p.rectMode(p.CORNER);
+
+      // State label
+      p.fill(sc[0],sc[1],sc[2],200);
+      p.textFont('Courier New'); p.textSize(8.5); p.textAlign(p.CENTER, p.CENTER);
+      let lbl = s;
+      if (s==='MS' && b.matchedEdge >= 0) {
+        const e = edges[b.matchedEdge]; if (e) lbl += '(' + e.portB + ')';
+      }
+      p.text(lbl, b.x, b.y);
+
+      p.fill(90,115,148,82); p.textSize(7.5); p.textAlign(p.CENTER, p.TOP);
+      p.text('Δ='+adjB[bi].length, b.x, b.y+NR+2);
+
+      // Show X set for UR black nodes
+      if (s === 'UR' && b.X.length > 0) {
+        p.fill(78,108,148,80); p.textSize(7); p.textAlign(p.CENTER, p.TOP);
+        p.text('X:{'+b.X.join(',')+'}', b.x, b.y+NR+12);
+      }
+
+      p.fill(88,108,135,75); p.textSize(7.5); p.textAlign(p.CENTER, p.BOTTOM);
+      p.text('b'+bi, b.x, b.y-NR-2);
+
+      if (s === 'MS') {
+        p.fill(sc[0],sc[1],sc[2],175); p.textSize(8.5); p.textAlign(p.CENTER, p.TOP);
+        p.text('✓', b.x, b.y+NR+2);
+      }
+    }
+  }
+
+  // ── Phase progress bar ──────────────────────────────────
+  function drawPhaseBar(p) {
+    const flying = phase === 'odd-flying' || phase === 'even-flying';
+    if (!flying) return;
+    const c = phase === 'odd-flying' ? [255,195,52] : [48,210,138];
+    const pr = 1 - pt / PT_FLY;
+    p.noStroke();
+    p.fill(c[0],c[1],c[2],22); p.rect(0, p.height-5, p.width*pr, 5);
+    p.fill(c[0],c[1],c[2],62); p.rect(0, p.height-2, p.width*pr, 2);
+  }
+
+}, 'cv');
+</script>
+</body>
+</html>

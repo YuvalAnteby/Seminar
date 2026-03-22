@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anonymous Network — PN Model Art</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --anthropic-dark: #141413;
+            --anthropic-light: #faf9f5;
+            --anthropic-mid-gray: #b0aea5;
+            --anthropic-light-gray: #e8e6dc;
+            --anthropic-orange: #d97757;
+            --anthropic-blue: #6a9bcc;
+            --anthropic-green: #788c5d;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: linear-gradient(135deg, var(--anthropic-light) 0%, #f5f3ee 100%);
+            min-height: 100vh;
+            color: var(--anthropic-dark);
+        }
+        .container { display: flex; min-height: 100vh; padding: 20px; gap: 20px; }
+        .sidebar {
+            width: 300px; flex-shrink: 0;
+            background: rgba(255,255,255,0.95);
+            backdrop-filter: blur(10px);
+            padding: 24px; border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(20,20,19,0.1);
+            overflow-y: auto;
+        }
+        .sidebar h1 { font-family: 'Lora', serif; font-size: 22px; font-weight: 500; color: var(--anthropic-dark); margin-bottom: 6px; }
+        .sidebar .subtitle { color: var(--anthropic-mid-gray); font-size: 13px; margin-bottom: 28px; line-height: 1.5; font-style: italic; }
+        .control-section { margin-bottom: 28px; }
+        .control-section h3 { font-size: 14px; font-weight: 600; color: var(--anthropic-dark); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+        .control-section h3::before { content: '•'; color: var(--anthropic-orange); font-weight: bold; }
+        .seed-input {
+            width: 100%; background: var(--anthropic-light); padding: 10px;
+            border-radius: 8px; font-family: 'Courier New', monospace; font-size: 13px;
+            margin-bottom: 10px; border: 1px solid var(--anthropic-light-gray); text-align: center;
+        }
+        .seed-input:focus { outline: none; border-color: var(--anthropic-orange); }
+        .seed-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+        .control-group { margin-bottom: 18px; }
+        .control-group label { display: block; font-size: 13px; font-weight: 500; color: var(--anthropic-dark); margin-bottom: 6px; }
+        .slider-container { display: flex; align-items: center; gap: 10px; }
+        .slider-container input[type="range"] {
+            flex: 1; height: 4px; background: var(--anthropic-light-gray);
+            border-radius: 2px; outline: none; -webkit-appearance: none;
+        }
+        .slider-container input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 15px; height: 15px;
+            background: var(--anthropic-orange); border-radius: 50%; cursor: pointer;
+        }
+        .value-display { font-family: 'Courier New', monospace; font-size: 11px; color: var(--anthropic-mid-gray); min-width: 36px; text-align: right; }
+        .button {
+            width: 100%; padding: 10px; border: none; border-radius: 8px;
+            font-family: 'Poppins', sans-serif; font-size: 13px; font-weight: 500;
+            cursor: pointer; transition: all 0.2s ease; margin-bottom: 8px;
+            background: var(--anthropic-light-gray); color: var(--anthropic-dark);
+        }
+        .button:hover { background: var(--anthropic-mid-gray); color: white; }
+        .button.primary { background: var(--anthropic-orange); color: white; }
+        .button.primary:hover { background: #c86641; }
+        .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .canvas-area { flex: 1; display: flex; align-items: center; justify-content: center; }
+        #canvas-container canvas { border-radius: 12px; box-shadow: 0 20px 60px rgba(20,20,19,0.15); display: block; }
+        .loading { color: var(--anthropic-mid-gray); font-size: 14px; padding: 40px; }
+        .legend { font-size: 11px; color: var(--anthropic-mid-gray); line-height: 1.7; margin-top: 8px; }
+        .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="sidebar">
+        <h1>Anonymous Network</h1>
+        <p class="subtitle">"You don't know who is on jack 2 — just that something is there."</p>
+
+        <div class="control-section">
+            <h3>Seed</h3>
+            <input class="seed-input" type="number" id="seed-input" value="42" onchange="updateSeed()">
+            <div class="seed-controls">
+                <button class="button" onclick="previousSeed()">← Prev</button>
+                <button class="button" onclick="nextSeed()">Next →</button>
+            </div>
+            <button class="button" onclick="randomSeedAndUpdate()">Random Seed</button>
+        </div>
+
+        <div class="control-section">
+            <h3>Network</h3>
+            <div class="control-group">
+                <label>Nodes</label>
+                <div class="slider-container">
+                    <input type="range" id="nodeCount" min="6" max="22" step="1" value="12" oninput="updateParam('nodeCount', +this.value)">
+                    <span class="value-display" id="nodeCount-value">12</span>
+                </div>
+            </div>
+            <div class="control-group">
+                <label>Signal Speed</label>
+                <div class="slider-container">
+                    <input type="range" id="signalSpeed" min="0.3" max="2.5" step="0.1" value="1.0" oninput="updateParam('signalSpeed', +this.value)">
+                    <span class="value-display" id="signalSpeed-value">1.0</span>
+                </div>
+            </div>
+            <div class="control-group">
+                <label>Signal Density</label>
+                <div class="slider-container">
+                    <input type="range" id="signalDensity" min="0.5" max="3.0" step="0.1" value="1.5" oninput="updateParam('signalDensity', +this.value)">
+                    <span class="value-display" id="signalDensity-value">1.5</span>
+                </div>
+            </div>
+            <div class="control-group">
+                <label>Node Radius</label>
+                <div class="slider-container">
+                    <input type="range" id="nodeRadius" min="14" max="34" step="1" value="22" oninput="updateParam('nodeRadius', +this.value)">
+                    <span class="value-display" id="nodeRadius-value">22</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="control-section">
+            <h3>Actions</h3>
+            <button class="button primary" onclick="rebuildNetwork()">Rebuild Network</button>
+            <div class="button-row">
+                <button class="button" onclick="resetParameters()">Reset</button>
+                <button class="button" onclick="downloadCanvas()">Save PNG</button>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div><span style="background:#2a3d5c"></span>Phone node (anonymous)</div>
+            <div><span style="background:#e8972a"></span>Active — receiving signal</div>
+            <div><span style="background:#1d8c7a"></span>Signal pulse in transit</div>
+            <div><span style="background:#4a6680"></span>Port number label</div>
+        </div>
+    </div>
+
+    <div class="canvas-area">
+        <div id="canvas-container">
+            <div class="loading">Initializing network…</div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ─── Parameters ─────────────────────────────────────────────
+let params = {
+    seed: 42,
+    nodeCount: 12,
+    signalSpeed: 1.0,
+    signalDensity: 1.5,
+    nodeRadius: 22,
+};
+let defaultParams = { ...params };
+
+// ─── State ──────────────────────────────────────────────────
+let nodes = [];
+let edges = [];
+let signals = [];
+let portLabels = [];
+let frameCounter = 0;
+
+// Palette
+const BG        = '#0d1b2a';
+const NODE_FILL = '#1a2e45';
+const NODE_STR  = '#2e5077';
+const WIRE      = '#2a3d5c';
+const WIRE_HL   = '#3d5a7a';
+const SIGNAL_C  = '#1d8c7a';
+const SIGNAL_GL = '#4ecdc4';
+const ACTIVE_C  = '#e8972a';
+const ACTIVE_GL = '#ffc15e';
+const PORT_C    = '#4a6680';
+const LABEL_C   = '#8cb4cc';
+const TEXT_C    = '#c8dde8';
+
+// ─── p5 sketch ──────────────────────────────────────────────
+new p5(function(p) {
+
+    p.setup = function() {
+        let cnv = p.createCanvas(760, 760);
+        cnv.parent('canvas-container');
+        document.querySelector('.loading').style.display = 'none';
+        p.colorMode(p.RGB, 255, 255, 255, 255);
+        buildNetwork();
+    };
+
+    p.draw = function() {
+        frameCounter++;
+        drawScene(p);
+        updateSignals(p);
+        maybeSpawnSignal(p);
+    };
+
+    function drawScene(p) {
+        // Soft trail fade instead of full clear — for signal glow persistence
+        p.background(p.color(13, 27, 42));
+
+        // ── Draw wires ────────────────────────────────────────
+        for (let e of edges) {
+            let na = nodes[e.a], nb = nodes[e.b];
+
+            // Active glow if a signal is on this edge
+            let activeSignal = signals.find(s => s.edgeIdx === edges.indexOf(e));
+            if (activeSignal) {
+                p.stroke(p.color(61, 90, 122, 80));
+                p.strokeWeight(6);
+                p.line(na.x, na.y, nb.x, nb.y);
+            }
+
+            p.stroke(p.color(42, 61, 92));
+            p.strokeWeight(1.5);
+            p.line(na.x, na.y, nb.x, nb.y);
+
+            // Port labels on each end
+            drawPortLabel(p, na, nb, e.portA);
+            drawPortLabel(p, nb, na, e.portB);
+        }
+
+        // ── Draw signals ──────────────────────────────────────
+        for (let s of signals) {
+            let e = edges[s.edgeIdx];
+            let na = nodes[e.a], nb = nodes[e.b];
+            let sx = s.forward ? p.lerp(na.x, nb.x, s.t) : p.lerp(nb.x, na.x, s.t);
+            let sy = s.forward ? p.lerp(na.y, nb.y, s.t) : p.lerp(nb.y, na.y, s.t);
+
+            // Glow layers
+            p.noStroke();
+            p.fill(p.color(78, 205, 196, 30));
+            p.circle(sx, sy, 28);
+            p.fill(p.color(78, 205, 196, 70));
+            p.circle(sx, sy, 14);
+            p.fill(p.color(78, 205, 196, 200));
+            p.circle(sx, sy, 7);
+            p.fill(255);
+            p.circle(sx, sy, 3);
+        }
+
+        // ── Draw nodes ────────────────────────────────────────
+        for (let n of nodes) {
+            let isActive = n.activeCooldown > 0;
+
+            // Outer glow if active
+            if (isActive) {
+                let alpha = p.map(n.activeCooldown, 0, 40, 0, 100);
+                p.noStroke();
+                p.fill(p.color(232, 151, 42, alpha * 0.4));
+                p.circle(n.x, n.y, params.nodeRadius * 3.5);
+                p.fill(p.color(232, 151, 42, alpha * 0.7));
+                p.circle(n.x, n.y, params.nodeRadius * 2.2);
+            }
+
+            // Node body
+            p.stroke(isActive ? p.color(232, 151, 42) : p.color(46, 80, 119));
+            p.strokeWeight(isActive ? 2 : 1.5);
+            p.fill(p.color(26, 46, 69));
+            p.circle(n.x, n.y, params.nodeRadius * 2);
+
+            // Inner detail — phone handset symbol (two small arcs)
+            drawPhoneIcon(p, n.x, n.y, isActive);
+
+            // Node degree label (small, below)
+            p.noStroke();
+            p.fill(p.color(140, 180, 204, 160));
+            p.textFont('Courier New');
+            p.textSize(9);
+            p.textAlign(p.CENTER, p.TOP);
+            p.text('deg ' + n.ports.length, n.x, n.y + params.nodeRadius + 4);
+
+            if (isActive) n.activeCooldown--;
+        }
+    }
+
+    function drawPhoneIcon(p, x, y, active) {
+        let col = active ? p.color(255, 200, 100, 200) : p.color(100, 160, 200, 140);
+        p.stroke(col);
+        p.strokeWeight(1.5);
+        p.noFill();
+        let r = params.nodeRadius * 0.38;
+        // Stylised handset: two arcs
+        p.arc(x - r * 0.5, y, r * 1.1, r * 1.1, p.PI * 0.7, p.PI * 1.6);
+        p.arc(x + r * 0.5, y, r * 1.1, r * 1.1, p.PI * 1.55, p.PI * 2.45);
+        p.stroke(col);
+        p.strokeWeight(1);
+        p.line(x - r * 0.22, y - r * 0.42, x + r * 0.22, y - r * 0.42);
+        p.line(x - r * 0.22, y + r * 0.42, x + r * 0.22, y + r * 0.42);
+    }
+
+    function drawPortLabel(p, fromNode, toNode, portNum) {
+        // Place label slightly along the wire from fromNode toward toNode
+        let frac = (params.nodeRadius + 10) / p.dist(fromNode.x, fromNode.y, toNode.x, toNode.y);
+        frac = p.constrain(frac, 0.05, 0.45);
+        let lx = p.lerp(fromNode.x, toNode.x, frac);
+        let ly = p.lerp(fromNode.y, toNode.y, frac);
+
+        // Tiny offset perpendicular to wire
+        let dx = toNode.x - fromNode.x, dy = toNode.y - fromNode.y;
+        let len = p.sqrt(dx * dx + dy * dy);
+        let nx = -dy / len, ny = dx / len;
+        lx += nx * 7; ly += ny * 7;
+
+        p.noStroke();
+        p.fill(p.color(74, 102, 128, 200));
+        p.textFont('Courier New');
+        p.textSize(9);
+        p.textAlign(p.CENTER, p.CENTER);
+        p.text(portNum, lx, ly);
+    }
+
+    function updateSignals(p) {
+        let speed = params.signalSpeed * 0.008;
+        for (let i = signals.length - 1; i >= 0; i--) {
+            let s = signals[i];
+            s.t += speed;
+            if (s.t >= 1) {
+                // Arrived — activate destination node
+                let e = edges[s.edgeIdx];
+                let destIdx = s.forward ? e.b : e.a;
+                nodes[destIdx].activeCooldown = 40;
+                signals.splice(i, 1);
+            }
+        }
+    }
+
+    function maybeSpawnSignal(p) {
+        // Spawn probability scales with density param
+        if (p.random() < 0.012 * params.signalDensity && signals.length < 18) {
+            let eIdx = Math.floor(p.random(edges.length));
+            let fwd = p.random() > 0.5;
+            signals.push({ edgeIdx: eIdx, t: 0, forward: fwd });
+            // Activate source node
+            let e = edges[eIdx];
+            nodes[fwd ? e.a : e.b].activeCooldown = 20;
+        }
+    }
+
+    function buildNetwork() {
+        p.randomSeed(params.seed);
+        p.noiseSeed(params.seed);
+        nodes = [];
+        edges = [];
+        signals = [];
+
+        let n = params.nodeCount;
+        let cx = p.width / 2, cy = p.height / 2;
+        let R = p.min(p.width, p.height) * 0.36;
+
+        // Place nodes on a slightly jittered ring layout
+        for (let i = 0; i < n; i++) {
+            let angle = (p.TWO_PI * i / n) - p.HALF_PI;
+            let r = R + p.random(-R * 0.18, R * 0.18);
+            nodes.push({
+                x: cx + p.cos(angle) * r,
+                y: cy + p.sin(angle) * r,
+                ports: [],       // will fill after edge creation
+                activeCooldown: 0,
+            });
+        }
+
+        // Add a few inner nodes for complexity
+        let innerCount = Math.max(1, Math.floor(n / 5));
+        for (let i = 0; i < innerCount; i++) {
+            let angle = p.random(p.TWO_PI);
+            let r = R * p.random(0.15, 0.48);
+            nodes.push({
+                x: cx + p.cos(angle) * r,
+                y: cy + p.sin(angle) * r,
+                ports: [],
+                activeCooldown: 0,
+            });
+        }
+
+        // Build edges: ring + random extras, no duplicates, no self-loops
+        let edgeSet = new Set();
+        function tryEdge(a, b) {
+            if (a === b) return;
+            let key = Math.min(a, b) + '_' + Math.max(a, b);
+            if (edgeSet.has(key)) return;
+            edgeSet.add(key);
+            let portA = nodes[a].ports.length + 1;
+            let portB = nodes[b].ports.length + 1;
+            nodes[a].ports.push(portA);
+            nodes[b].ports.push(portB);
+            edges.push({ a, b, portA, portB });
+        }
+
+        // Connect ring
+        for (let i = 0; i < n; i++) tryEdge(i, (i + 1) % n);
+
+        // Random additional edges (not too dense)
+        let extraEdges = Math.floor(n * 0.55);
+        for (let i = 0; i < extraEdges; i++) {
+            let a = Math.floor(p.random(nodes.length));
+            let b = Math.floor(p.random(nodes.length));
+            tryEdge(a, b);
+        }
+
+        // Connect inner nodes to ring
+        for (let i = n; i < nodes.length; i++) {
+            let a = Math.floor(p.random(n));
+            let b = Math.floor(p.random(n));
+            tryEdge(i, a);
+            if (a !== b) tryEdge(i, b);
+        }
+
+        // Seed initial signals
+        for (let i = 0; i < Math.floor(params.signalDensity * 3); i++) {
+            if (edges.length > 0) {
+                let eIdx = Math.floor(p.random(edges.length));
+                signals.push({ edgeIdx: eIdx, t: p.random(), forward: p.random() > 0.5 });
+            }
+        }
+    }
+
+    // Expose to outer scope
+    window._p5rebuild = buildNetwork;
+
+}, 'canvas-container');
+
+// ─── UI Functions ────────────────────────────────────────────
+function rebuildNetwork() {
+    if (window._p5rebuild) window._p5rebuild();
+}
+
+function updateParam(name, value) {
+    params[name] = value;
+    document.getElementById(name + '-value').textContent = parseFloat(value).toFixed(
+        name === 'signalSpeed' || name === 'signalDensity' ? 1 : 0
+    );
+    if (name === 'nodeCount') rebuildNetwork();
+}
+
+function updateSeed() {
+    let v = parseInt(document.getElementById('seed-input').value);
+    if (v > 0) { params.seed = v; rebuildNetwork(); }
+}
+
+function previousSeed() {
+    params.seed = Math.max(1, params.seed - 1);
+    document.getElementById('seed-input').value = params.seed;
+    rebuildNetwork();
+}
+
+function nextSeed() {
+    params.seed++;
+    document.getElementById('seed-input').value = params.seed;
+    rebuildNetwork();
+}
+
+function randomSeedAndUpdate() {
+    params.seed = Math.floor(Math.random() * 99999) + 1;
+    document.getElementById('seed-input').value = params.seed;
+    rebuildNetwork();
+}
+
+function resetParameters() {
+    params = { ...defaultParams };
+    document.getElementById('nodeCount').value = params.nodeCount;
+    document.getElementById('nodeCount-value').textContent = params.nodeCount;
+    document.getElementById('signalSpeed').value = params.signalSpeed;
+    document.getElementById('signalSpeed-value').textContent = params.signalSpeed.toFixed(1);
+    document.getElementById('signalDensity').value = params.signalDensity;
+    document.getElementById('signalDensity-value').textContent = params.signalDensity.toFixed(1);
+    document.getElementById('nodeRadius').value = params.nodeRadius;
+    document.getElementById('nodeRadius-value').textContent = params.nodeRadius;
+    document.getElementById('seed-input').value = params.seed;
+    rebuildNetwork();
+}
+
+function downloadCanvas() {
+    let cnv = document.querySelector('#canvas-container canvas');
+    let a = document.createElement('a');
+    a.download = 'anonymous-network-seed' + params.seed + '.png';
+    a.href = cnv.toDataURL();
+    a.click();
+}
+</script>
+</body>
+</html>
